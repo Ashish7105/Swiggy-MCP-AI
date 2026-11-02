@@ -1,82 +1,116 @@
 """REPL entrypoint: `python -m src.cli`.
 
-Connects to Swiggy's Food MCP server as you (OAuth, browser consent on
-first run), then hands the conversation to the orchestrator turn by turn.
+Asks which Swiggy service to use (Food, Instamart, Dineout, ... — whatever
+SWIGGY_SERVICES lists), connects to that MCP server as you (OAuth, browser
+consent the first time per service), then hands the conversation to that
+service's orchestrator turn by turn. `/<service>` switches at any time;
+each service keeps its own connection and conversation.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import AsyncExitStack
 
 from . import config
-from .mcp_client import SwiggyMCPConnection
-from .orchestrator import Orchestrator, find_saved_address_id
+from .orchestrator import Orchestrator
+from .services import open_service
 
 BANNER = """\
-Swiggy Conversational Food Assistant (personal use)
------------------------------------------------------
-Connecting to {url} ...
-Type your request in plain English. Type 'exit' or Ctrl-D to quit.
+Swiggy Conversational Assistant (personal use)
+-----------------------------------------------
+Services: {services}
+Type /<service> to switch (e.g. /{first}), 'exit' or Ctrl-D to quit.
 """
 
 
-async def _confirm(tool_name: str, arguments: dict) -> bool:
-    """CLI confirmation gate for order/payment tool calls."""
-    print(f"\n[confirmation needed] About to run '{tool_name}' with:")
-    print(f"  {arguments}")
+async def _confirm(tool_name: str, arguments: dict, summary: str) -> bool:
+    """CLI confirmation gate for order/payment/booking tool calls."""
+    print(f"\n[confirmation needed] About to run '{tool_name}':")
+    if summary:
+        print(f"  {summary}")
+    print(f"  details: {arguments}")
     answer = await asyncio.get_event_loop().run_in_executor(
         None, input, "Proceed? [y/N]: "
     )
     return answer.strip().lower() in ("y", "yes")
 
 
+async def _open_service(
+    name: str, settings: config.Settings, stack: AsyncExitStack
+) -> Orchestrator:
+    print(f"\nConnecting to {name} ({settings.swiggy_services[name]}) ...")
+    opened = await open_service(name, settings, stack, confirm=_confirm, notify=print)
+    # Names only: Swiggy's full descriptions are pages of instructions
+    # meant for the model, not for the terminal.
+    print(f"Connected. {len(opened.tool_names)} tool(s): {', '.join(opened.tool_names)}")
+    if opened.address_note:
+        print(opened.address_note)
+    print()
+    return opened.orchestrator
+
+
+def _pick_service(answer: str, services: list[str]) -> str | None:
+    answer = answer.strip().lower().lstrip("/")
+    if answer.isdigit() and 1 <= int(answer) <= len(services):
+        return services[int(answer) - 1]
+    return answer if answer in services else None
+
+
 async def _run() -> None:
     settings = config.load_settings()
-    print(BANNER.format(url=settings.swiggy_food_url))
+    services = list(settings.swiggy_services)
+    print(BANNER.format(services=", ".join(services), first=services[0]))
 
-    async with SwiggyMCPConnection(settings.swiggy_food_url, settings) as source:
-        print(f"Connected. {len(source.tools)} tool(s) available:")
-        for tool in source.tools:
-            print(f"  - {tool.name}: {tool.description or ''}".rstrip())
-        print()
+    loop = asyncio.get_event_loop()
+    orchestrators: dict[str, Orchestrator] = {}
+    current: str | None = None
 
-        address_id = None
-        if settings.default_address_label:
-            try:
-                address_id = await find_saved_address_id(source.call_tool, settings.default_address_label)
-            except Exception as exc:  # noqa: BLE001 - fall back to asking per order
-                print(f"[couldn't load saved addresses: {exc}]")
-            if address_id:
-                print(f"Delivering to your saved '{settings.default_address_label}' address by default.\n")
-            else:
-                print(
-                    f"No saved address labelled '{settings.default_address_label}' found; "
-                    "the assistant will ask which address to use.\n"
-                )
-
-        orchestrator = Orchestrator(
-            settings=settings,
-            tools=source.tools,
-            call_tool=source.call_tool,
-            confirm=_confirm,
-            default_address_label=settings.default_address_label,
-            default_address_id=address_id,
-        )
-
-        loop = asyncio.get_event_loop()
+    async with AsyncExitStack() as stack:
         while True:
+            if current is None:
+                menu = "  ".join(f"{i}) {s}" for i, s in enumerate(services, 1))
+                try:
+                    answer = await loop.run_in_executor(None, input, f"Which service? {menu}\n> ")
+                except EOFError:
+                    break
+                if answer.strip().lower() in ("exit", "quit"):
+                    break
+                current = _pick_service(answer, services)
+                if current is None:
+                    print(f"Please pick one of: {', '.join(services)}")
+                    continue
+
+            if current not in orchestrators:
+                try:
+                    orchestrators[current] = await _open_service(current, settings, stack)
+                except Exception as exc:  # noqa: BLE001 - other services can still work
+                    print(f"[couldn't connect to {current}: {exc}]\n")
+                    current = None
+                    continue
+
             try:
-                user_input = await loop.run_in_executor(None, input, "you> ")
+                user_input = await loop.run_in_executor(None, input, f"you ({current})> ")
             except EOFError:
                 break
-            if not user_input.strip():
+            text = user_input.strip()
+            if not text:
                 continue
-            if user_input.strip().lower() in ("exit", "quit"):
+            if text.lower() in ("exit", "quit"):
                 break
+            if text.startswith("/"):
+                picked = _pick_service(text, services)
+                if picked is None:
+                    print(f"Unknown service. Available: {', '.join('/' + s for s in services)}")
+                else:
+                    current = picked
+                    if current in orchestrators:
+                        print(f"Switched to {current}.\n")
+                continue
 
             try:
-                reply = await orchestrator.send(user_input)
+                reply = await orchestrators[current].send(text)
             except Exception as exc:  # noqa: BLE001 - keep the REPL alive
                 print(f"\n[error] {exc}\n")
                 continue

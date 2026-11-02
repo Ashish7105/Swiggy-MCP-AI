@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swiggy Assistant</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f3; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --border: #e4e2de; --accent: #fc8019; --accent-text: #ffffff;
+    --user-bg: #fff1e6; --user-border: #fbd4b4; --error: #c0362c; --error-bg: #fdecea;
+    --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --panel: #1e1e21; --text: #ececee; --muted: #9a9aa0;
+      --border: #2e2e33; --accent: #ff8a2b; --accent-text: #1a1a1a;
+      --user-bg: #3a2616; --user-border: #5a3a1f; --error: #ff7b70; --error-bg: #3a1d1b;
+      --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  }
+  header h1 { font-size: 17px; margin: 0 8px 0 0; white-space: nowrap; }
+  .conn { font-size: 12px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+  .conn::before { content: "●"; margin-right: 4px; color: var(--error); }
+  .conn.ok::before { color: #2ea44f; }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  nav button {
+    border: 1px solid var(--border); background: transparent; color: var(--text);
+    padding: 6px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 14px;
+  }
+  nav button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .info { font-size: 13px; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  main { flex: 1; overflow-y: auto; padding: 16px; }
+  .log { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 10px 14px; border-radius: 14px; max-width: 88%; overflow-wrap: anywhere; }
+  .msg.user { align-self: flex-end; background: var(--user-bg); border: 1px solid var(--user-border); white-space: pre-wrap; }
+  .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); }
+  .msg.bot > :first-child { margin-top: 0; } .msg.bot > :last-child { margin-bottom: 0; }
+  .msg.bot table { border-collapse: collapse; margin: 6px 0; font-size: 14px; display: block; overflow-x: auto; }
+  .msg.bot th, .msg.bot td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+  .msg.bot h1, .msg.bot h2, .msg.bot h3 { font-size: 15px; margin: 10px 0 4px; }
+  .msg.bot ul, .msg.bot ol { padding-left: 20px; margin: 4px 0; }
+  .msg.error { align-self: stretch; background: var(--error-bg); color: var(--error); border: 1px solid var(--error); font-size: 14px; }
+  .status { align-self: center; font-size: 12px; color: var(--muted); font-style: italic; text-align: center; }
+  .empty { color: var(--muted); text-align: center; margin-top: 15vh; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: 14px; padding: 4px 14px; }
+  .typing span { animation: blink 1.2s infinite; } .typing span:nth-child(2) { animation-delay: .2s; } .typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+  form { background: var(--panel); border-top: 1px solid var(--border); padding: 12px 16px; }
+  .composer { max-width: 820px; margin: 0 auto; display: flex; gap: 8px; }
+  textarea {
+    flex: 1; resize: none; min-height: 44px; max-height: 160px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .primary { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 12px; padding: 0 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  .primary:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; }
+  dialog { border: 1px solid var(--border); border-radius: 16px; background: var(--panel); color: var(--text); padding: 20px; width: min(460px, calc(100vw - 32px)); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h2 { margin: 0 0 6px; font-size: 18px; }
+  dialog .summary { font-size: 15px; margin: 8px 0 12px; max-height: 40vh; overflow-y: auto; }
+  dialog .summary > :first-child { margin-top: 0; } dialog .summary > :last-child { margin-bottom: 0; }
+  dialog .summary ul, dialog .summary ol { padding-left: 20px; margin: 4px 0; }
+  dialog .warn { color: var(--error); font-size: 13px; margin: 0 0 12px; }
+  dialog details { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+  dialog summary { cursor: pointer; }
+  dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 8px 0 0; font-size: 14px; max-height: 30vh; overflow-y: auto; color: var(--text); }
+  dialog dt { color: var(--muted); } dialog dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  dialog .actions button { padding: 9px 16px; border-radius: 10px; font: inherit; cursor: pointer; }
+  .secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  @media (max-width: 560px) { header h1 { width: 100%; } .conn { margin-left: 0; } .msg { max-width: 100%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Swiggy Assistant</h1>
+  <nav id="tabs" role="tablist" aria-label="Swiggy service"></nav>
+  <span id="conn" class="conn">Connecting…</span>
+</header>
+<div id="info" class="info">Pick a service to start.</div>
+<main id="main"></main>
+<form id="form" autocomplete="off">
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="Type a message…" aria-label="Message" disabled></textarea>
+    <button id="send" class="primary" type="submit" disabled>Send</button>
+  </div>
+</form>
+
+<dialog id="confirm">
+  <h2 id="confirm-title">Confirm</h2>
+  <div id="confirm-summary" class="summary"></div>
+  <p class="warn" id="confirm-warn"></p>
+  <details>
+    <summary>Technical details</summary>
+    <dl id="confirm-args"></dl>
+  </details>
+  <div class="actions">
+    <button type="button" class="secondary" id="confirm-no" autofocus>Cancel</button>
+    <button type="button" class="primary" id="confirm-yes">Confirm</button>
+  </div>
+</dialog>
+
+<script>
+const ICONS = { food: "🍔", instamart: "🛒", dineout: "🍽️", scenes: "🎟️" };
+const PLACEHOLDERS = {
+  food: "e.g. find me some biryani places",
+  instamart: "e.g. 2 packets of milk",
+  dineout: "e.g. Italian in Indiranagar for 2, Saturday 8pm",
+};
+const $ = (id) => document.getElementById(id);
+const state = { services: [], current: null, ready: {}, info: {}, busy: false, logs: {}, ws: null, lastService: null };
+
+function title(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function render(md) {
+  if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(md));
+  const div = document.createElement("div"); div.textContent = md; return div.innerHTML.replace(/\n/g, "<br>");
+}
+
+function logFor(service) {
+  if (!state.logs[service]) {
+    const log = document.createElement("div");
+    log.className = "log";
+    log.innerHTML = `<p class="empty">${ICONS[service] || "💬"} Connecting to ${title(service)}…</p>`;
+    state.logs[service] = log;
+  }
+  return state.logs[service];
+}
+
+function add(service, cls, html) {
+  const log = logFor(service);
+  log.querySelector(".empty")?.remove();
+  log.querySelector(".typing")?.remove();
+  const el = document.createElement("div");
+  el.className = cls;
+  el.innerHTML = html;
+  log.appendChild(el);
+  if (state.busy && service === state.lastService) showTyping(service);
+  if (service === state.current) $("main").scrollTop = $("main").scrollHeight;
+}
+function addText(service, cls, text) { const d = document.createElement("div"); d.textContent = text; add(service, cls, d.innerHTML); }
+function showTyping(service) {
+  const log = logFor(service);
+  if (!log.querySelector(".typing")) {
+    const t = document.createElement("div");
+    t.className = "typing"; t.innerHTML = "<span>●</span><span>●</span><span>●</span>";
+    log.appendChild(t);
+  }
+}
+
+function setBusy(busy, service) {
+  state.busy = busy;
+  if (service) state.lastService = service;
+  if (!busy) Object.values(state.logs).forEach((l) => l.querySelector(".typing")?.remove());
+  else showTyping(service);
+  updateComposer();
+}
+
+function updateComposer() {
+  const ok = state.ws?.readyState === 1 && state.current && state.ready[state.current] && !state.busy;
+  $("input").disabled = !ok; $("send").disabled = !ok;
+  $("input").placeholder = PLACEHOLDERS[state.current] || "Type a message…";
+  if (ok) $("input").focus();
+}
+
+function selectService(service) {
+  state.current = service;
+  document.querySelectorAll("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.service === service));
+  $("main").replaceChildren(logFor(service));
+  $("info").textContent = state.info[service] || (state.ready[service] ? "" : `Connecting to ${title(service)}…`);
+  if (!state.ready[service] && !state.busy) { setBusy(true, service); send({ type: "open", service }); }
+  updateComposer();
+  $("main").scrollTop = $("main").scrollHeight;
+}
+
+function buildTabs() {
+  $("tabs").replaceChildren(...state.services.map((s) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.role = "tab"; b.dataset.service = s;
+    b.textContent = `${ICONS[s] || "💬"} ${title(s)}`;
+    b.onclick = () => { if (!state.busy || state.ready[s]) selectService(s); };
+    return b;
+  }));
+}
+
+function send(msg) { if (state.ws?.readyState === 1) state.ws.send(JSON.stringify(msg)); }
+
+function askConfirm({ id, tool, args, summary }) {
+  $("confirm-title").textContent = "Confirm: " + tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  $("confirm-summary").innerHTML = summary
+    ? render(summary)
+    : "<p>The assistant didn't describe this action. Check the technical details below.</p>";
+  const placesOrder = /place|checkout|order$|book|pay/i.test(tool);
+  $("confirm-warn").textContent = placesOrder
+    ? "This places a real order or booking on your Swiggy account. Cash-on-delivery orders can't be cancelled."
+    : "This changes your Swiggy account (no order is placed).";
+  $("confirm-summary").closest("dialog").querySelector("details").open = !summary;
+  $("confirm-args").replaceChildren(...Object.entries(args || {}).flatMap(([k, v]) => {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+    return [dt, dd];
+  }));
+  const dlg = $("confirm");
+  const answer = (ok) => { dlg.close(); send({ type: "confirm_reply", id, ok }); };
+  $("confirm-yes").onclick = () => answer(true);
+  $("confirm-no").onclick = () => answer(false);
+  dlg.oncancel = (e) => { e.preventDefault(); answer(false); };
+  dlg.showModal();
+}
+
+function onMessage(ev) {
+  const m = JSON.parse(ev.data);
+  const service = m.service || state.lastService || state.current;
+  switch (m.type) {
+    case "hello":
+      state.services = m.services; buildTabs();
+      m.opened.forEach((o) => { state.ready[o.service] = true; state.info[o.service] = o.address; });
+      if (state.current) selectService(state.current);
+      break;
+    case "service_ready":
+      state.ready[m.service] = true;
+      state.info[m.service] = m.address || "";
+      logFor(m.service).querySelector(".empty")?.remove();
+      if (!logFor(m.service).children.length) {
+        logFor(m.service).innerHTML = `<p class="empty">${ICONS[m.service] || "💬"} Connected to ${title(m.service)}. What would you like?</p>`;
+      }
+      setBusy(false);
+      if (m.service === state.current) { $("info").textContent = state.info[m.service]; }
+      updateComposer();
+      break;
+    case "status": addText(service, "status", m.text); break;
+    case "reply": setBusy(false); add(service, "msg bot", render(m.text)); break;
+    case "error":
+      setBusy(false); addText(service, "msg error", m.text);
+      if (!state.ready[service] && service === state.current) $("info").textContent = "Not connected. Click the tab to retry.";
+      break;
+    case "confirm": askConfirm(m); break;
+  }
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  state.ws = ws;
+  ws.onopen = () => { $("conn").textContent = "Connected"; $("conn").classList.add("ok"); updateComposer(); };
+  ws.onmessage = onMessage;
+  ws.onclose = () => {
+    $("conn").textContent = "Disconnected — retrying…"; $("conn").classList.remove("ok");
+    setBusy(false); setTimeout(connect, 2000);
+  };
+}
+
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  const text = $("input").value.trim();
+  if (!text || $("send").disabled) return;
+  addText(state.current, "msg user", text);
+  $("input").value = ""; $("input").style.height = "";
+  setBusy(true, state.current);
+  send({ type: "message", service: state.current, text });
+};
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("form").requestSubmit(); }
+});
+$("input").addEventListener("input", (e) => { e.target.style.height = ""; e.target.style.height = e.target.scrollHeight + "px"; });
+
+connect();
+</script>
+</body>
+</html>
